@@ -14,7 +14,7 @@ if 'text' not in st.session_state:
 if 'transcription_result' not in st.session_state:
     st.session_state['transcription_result'] = ""
 
-# Audio parameters (These might need adjustment or confirmation based on AssemblyAI requirements)
+# Audio parameters (These might need adjustment or confirmation based on your AssemblyAI requirements)
 st.sidebar.header('Audio Parameters')
 
 # FRAMES_PER_BUFFER and FORMAT are less relevant with streamlit-webrtc as it handles the browser audio capture
@@ -57,8 +57,17 @@ with st.expander('About this App'):
 
 col1, col2 = st.columns(2)
 
+# Use streamlit-webrtc to capture audio from the browser
+webrtc_ctx = webrtc_streamer(
+    key="realtime_transcription",
+    mode=WebRtcMode.SENDONLY,  # We only need to send audio to the server
+    audio_html_attrs={"autoPlay": True, "controls": True}, # Optional: Display controls
+    # Add this line to request only audio access:
+    media_stream_constraints={"video": False, "audio": True} 
+)
+
 # Stream processing logic (inside a callback, which `streamlit-webrtc` handles)
-# Class-based approach for the audio processor
+# We'll use a class-based approach for the audio processor
 class TranscriptionProcessor(AudioProcessorBase):
     def __init__(self, websocket_url):
         self.websocket_url = websocket_url
@@ -105,16 +114,11 @@ class TranscriptionProcessor(AudioProcessorBase):
                 elif data['message_type'] == 'Error':
                     print(f"AssemblyAI Error: {data['error']}")
 
-
-# Use streamlit-webrtc to capture audio from the browser
-webrtc_ctx = webrtc_streamer(
-    key="realtime_transcription",
-    mode=WebRtcMode.SENDONLY,  # Only send audio to the server
-    audio_html_attrs={"autoPlay": True, "controls": True}, # Optional: Display controls
-    media_stream_constraints={"video": False, "audio": True},
-    # Pass the processor class to audio_processor_factory
-    audio_processor_factory=lambda: TranscriptionProcessor(websocket_url=URL)
-)
+# Integrate the processor with streamlit-webrtc
+if webrtc_ctx.state.playing:
+    processor = TranscriptionProcessor(websocket_url=URL)
+    webrtc_ctx.audio_processor = processor
+    asyncio.run(processor.run())
 
 # Display the final transcription result
 if st.session_state['transcription_result']:
@@ -124,10 +128,4 @@ if st.session_state['transcription_result']:
     # Download button for the transcription
     download_transcription()
 
-
-st.info(st.session_state['text'])
-
-# The `run` method in the processor class might need to be triggered differently
-# or integrated with the main Streamlit loop.
-# The current approach might still have issues with async execution within Streamlit.
-# Further refinement may be needed based on real-world testing.
+st.info(st.session_state['text']) # Display listening status

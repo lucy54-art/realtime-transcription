@@ -1,145 +1,96 @@
 import streamlit as st
-from streamlit_webrtc import webrtc_streamer, WebRtcMode, AudioProcessorBase
+import threading
 import asyncio
 import websockets
-import threading
-import json
-from streamlit_autorefresh import st_autorefresh
-
+import time
 
 import websockets
 st.write(f"websockets version: {websockets.__version__}")
 
+# Globals for WebSocket URL and headers example
+WS_URL = "wss://your.websocket.url"
+WS_HEADERS = {"Authorization": "Bearer your_token"}
 
+# Function to run asyncio event loop forever in thread
+def start_loop(loop):
+    asyncio.set_event_loop(loop)
+    loop.run_forever()
 
-# Constants
-RATE = 16000
-URL = f"wss://api.assemblyai.com/v2/realtime/ws?sample_rate={RATE}"
-API_KEY = st.secrets["general"]["ASSEMBLYAI_API_KEY"]
-
-# Initialize session state variables
-if "run" not in st.session_state:
-    st.session_state.run = False
-if "text" not in st.session_state:
-    st.session_state.text = "Press Start to begin."
-if "transcription_result" not in st.session_state:
-    st.session_state.transcription_result = ""
-if "ws_thread" not in st.session_state:
-    st.session_state.ws_thread = None
-
-st.set_page_config(page_title="Real-Time Transcription", layout="centered")
-st.title("🎙️ Real-Time Transcription with AssemblyAI")
-
-col1, col2 = st.columns(2)
-if col1.button("Start"):
-    st.session_state.run = True
-    st.session_state.text = "Connecting..."
-    st.session_state.transcription_result = ""
-    st.write("▶️ Start button clicked")
-    st.write(f"📌 run state: {st.session_state.run}")
-
-if col2.button("Stop"):
-    st.session_state.run = False
-    st.session_state.text = "Stopped"
-    st.write("⏹️ Stop button clicked")
-
-# Display current status text
-status_placeholder = st.empty()
-
-if st.session_state.transcription_result:
-    st.download_button(
-        label="Download Transcription",
-        data=st.session_state.transcription_result,
-        file_name="transcription.txt",
-        mime="text/plain"
-    )
-
-# Global websocket reference
-websocket = None
-
-async def receiver():
-    global websocket
-    headers = {"Authorization": API_KEY}
-    print("🌐 Attempting WebSocket connection...")
-
+# Async function to connect and manage WebSocket connection
+async def websocket_client(run_flag):
+    st.write("🌐 Attempting WebSocket connection...")
     try:
-        async with websockets.connect(URL, extra_headers=headers) as ws:
-            print("✅ Connected to WebSocket")
-            websocket = ws
-
-            while st.session_state.run:
-                try:
-                    msg = await ws.recv()
-                    print(f"📥 Received message: {msg[:80]}...")
-                    data = json.loads(msg)
-
-                    if data["message_type"] == "PartialTranscript":
-                        st.session_state.text = f"Partial: {data['text']}"
-                        print(f"Partial transcript: {data['text']}")
-                    elif data["message_type"] == "FinalTranscript":
-                        st.session_state.transcription_result += data["text"] + "\n"
-                        st.session_state.text = f"Final: {data['text']}"
-                        print(f"Final transcript: {data['text']}")
-                except Exception as e:
-                    print("❌ WebSocket receive error:", e)
-                    break
+        # websockets.connect doesn't accept extra_headers in all versions.
+        # So build headers into `headers` param if needed.
+        async with websockets.connect(WS_URL, extra_headers=WS_HEADERS) as websocket:
+            st.write("✅ WebSocket connected!")
+            while run_flag["running"]:
+                # Example: send ping every 5 sec
+                await websocket.send("ping")
+                response = await websocket.recv()
+                st.write(f"Received: {response}")
+                await asyncio.sleep(5)
     except Exception as e:
-        print("❌ WebSocket connection error:", e)
+        st.write(f"❌ WebSocket connection error: {e}")
     finally:
-        print("🛑 WebSocket connection closed")
+        st.write("🛑 WebSocket connection closed")
 
-def start_ws_thread():
-    def run_loop():
-        print("🧵 Starting asyncio event loop in thread")
+# Setup Streamlit UI
+st.title("Async WebSocket with Streamlit")
+
+if "run_flag" not in st.session_state:
+    st.session_state.run_flag = {"running": False}
+if "loop" not in st.session_state:
+    st.session_state.loop = None
+if "thread" not in st.session_state:
+    st.session_state.thread = None
+
+def start_ws():
+    if st.session_state.run_flag["running"]:
+        st.write("⚠️ Already running")
+        return
+
+    st.session_state.run_flag["running"] = True
+    st.write("▶️ Start button clicked")
+    st.write(f"📌 run state: {st.session_state.run_flag['running']}")
+    st.write("Connecting...")
+
+    # Create new asyncio loop and thread only if not exists or closed
+    if st.session_state.loop is None or st.session_state.loop.is_closed():
         loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+        st.session_state.loop = loop
+        thread = threading.Thread(target=start_loop, args=(loop,), daemon=True)
+        st.session_state.thread = thread
+        thread.start()
+        st.write("🚀 Launching WebSocket thread...")
 
-        try:
-            loop.run_until_complete(receiver())
-        except Exception as e:
-            print("❌ Exception in thread:", e)
-        finally:
-            loop.close()
-            print("🛑 Event loop closed")
+    # Schedule websocket_client in the asyncio loop
+    asyncio.run_coroutine_threadsafe(websocket_client(st.session_state.run_flag), st.session_state.loop)
 
-    if st.session_state.ws_thread is None or not st.session_state.ws_thread.is_alive():
-        print("🚀 Launching WebSocket thread...")
-        st.session_state.ws_thread = threading.Thread(target=run_loop, daemon=True)
-        st.session_state.ws_thread.start()
-    else:
-        print("🟢 WebSocket thread already running")
+def stop_ws():
+    if not st.session_state.run_flag["running"]:
+        st.write("⚠️ Not running")
+        return
+    st.write("🛑 Stop button clicked")
+    st.session_state.run_flag["running"] = False
 
-class AudioSender(AudioProcessorBase):
-    def recv(self, frame):
-        global websocket
-        if st.session_state.run and websocket:
-            try:
-                audio_bytes = frame.to_ndarray().tobytes()
-                future = asyncio.run_coroutine_threadsafe(
-                    websocket.send(audio_bytes),
-                    asyncio.get_event_loop()
-                )
-                result = future.result(timeout=1)
-                print("🔊 Sent audio frame")
-            except Exception as e:
-                print(f"❌ Audio send error: {e}")
-        return frame
+    # Cleanup: stop event loop and thread
+    if st.session_state.loop:
+        st.session_state.loop.call_soon_threadsafe(st.session_state.loop.stop)
+        st.session_state.thread.join(timeout=5)
+        st.session_state.loop.close()
+        st.write("🧹 Event loop and thread closed")
+        st.session_state.loop = None
+        st.session_state.thread = None
 
-webrtc_ctx = webrtc_streamer(
-    key="audio-stream",
-    mode=WebRtcMode.SENDONLY,
-    audio_processor_factory=AudioSender,
-    media_stream_constraints={"video": False, "audio": True},
-    audio_html_attrs={"controls": True, "autoPlay": True}
-)
+# Buttons for UI
+col1, col2 = st.columns(2)
+with col1:
+    if st.button("Start"):
+        start_ws()
+with col2:
+    if st.button("Stop"):
+        stop_ws()
 
-# Start websocket thread if running
-if st.session_state.run:
-    start_ws_thread()
+st.write(f"Current run state: {st.session_state.run_flag['running']}")
 
-# Auto-refresh UI every second while running to show live updates
-if st.session_state.run:
-    st_autorefresh(interval=1000, limit=None, key="auto_refresh")
-    status_placeholder.info(st.session_state.text)
-else:
-    status_placeholder.info(st.session_state.text)

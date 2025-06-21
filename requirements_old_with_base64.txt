@@ -1,6 +1,7 @@
 streamlit
 websockets
 asyncio
+base64
 json
 pyaudio
 os

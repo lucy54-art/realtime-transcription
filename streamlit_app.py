@@ -62,6 +62,8 @@ webrtc_ctx = webrtc_streamer(
     key="realtime_transcription",
     mode=WebRtcMode.SENDONLY,  # We only need to send audio to the server
     audio_html_attrs={"autoPlay": True, "controls": True}, # Optional: Display controls
+    # Add this line to request only audio access:
+    media_stream_constraints={"video": False, "audio": True} 
 )
 
 # Stream processing logic (inside a callback, which `streamlit-webrtc` handles)

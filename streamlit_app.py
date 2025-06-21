@@ -4,10 +4,7 @@ import asyncio
 import websockets
 import threading
 import json
-import time
-
-# Global websocket reference
-websocket = None
+from streamlit_autorefresh import st_autorefresh
 
 # Constants
 RATE = 16000
@@ -51,6 +48,9 @@ if st.session_state.transcription_result:
         mime="text/plain"
     )
 
+# Global websocket reference
+websocket = None
+
 async def receiver():
     global websocket
     headers = {"Authorization": API_KEY}
@@ -79,6 +79,8 @@ async def receiver():
                     break
     except Exception as e:
         print("❌ WebSocket connection error:", e)
+    finally:
+        print("🛑 WebSocket connection closed")
 
 def start_ws_thread():
     def run_loop():
@@ -129,11 +131,9 @@ webrtc_ctx = webrtc_streamer(
 if st.session_state.run:
     start_ws_thread()
 
-# Refresh UI text every 0.5 seconds while running to show updates from the background thread
+# Auto-refresh UI every second while running to show live updates
 if st.session_state.run:
+    st_autorefresh(interval=1000, limit=None, key="auto_refresh")
     status_placeholder.info(st.session_state.text)
-    time.sleep(0.5)
-    st.experimental_rerun()
 else:
     status_placeholder.info(st.session_state.text)
-

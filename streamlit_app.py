@@ -1,131 +1,109 @@
 import streamlit as st
-import websockets
+from streamlit_webrtc import webrtc_streamer, WebRtcMode, AudioProcessorBase
 import asyncio
-import base64
+import websockets
 import json
 import os
-from pathlib import Path
-from streamlit_webrtc import webrtc_streamer, WebRtcMode, AudioProcessorBase
 
-# Session state
-if 'text' not in st.session_state:
-    st.session_state['text'] = 'Listening...'
-    st.session_state['run'] = False
-if 'transcription_result' not in st.session_state:
-    st.session_state['transcription_result'] = ""
+# Set page configuration
+st.set_page_config(page_title="Real-Time Transcription", layout="centered")
 
-# Audio parameters (These might need adjustment or confirmation based on your AssemblyAI requirements)
-st.sidebar.header('Audio Parameters')
+# Setup session state
+if "run" not in st.session_state:
+    st.session_state.run = False
+if "text" not in st.session_state:
+    st.session_state.text = "Listening..."
+if "transcription_result" not in st.session_state:
+    st.session_state.transcription_result = ""
+if "websocket" not in st.session_state:
+    st.session_state.websocket = None
+if "ws_task" not in st.session_state:
+    st.session_state.ws_task = None
 
-# FRAMES_PER_BUFFER and FORMAT are less relevant with streamlit-webrtc as it handles the browser audio capture
-# CHANNELS = 1 # Already hardcoded in the AssemblyAI URL below
-RATE = int(st.sidebar.text_input('Sample Rate', 16000)) # Sample rate for AssemblyAI
-
-# AssemblyAI Real-Time Transcription API endpoint
+# Audio sample rate
+RATE = 16000
 URL = f"wss://api.assemblyai.com/v2/realtime/ws?sample_rate={RATE}"
 
-# Start/stop flags for the app
-def start_listening():
-    st.session_state['run'] = True
+# Title
+st.title("🎙️ Real-Time Transcription")
 
-def stop_listening():
-    st.session_state['run'] = False
-
-# Function to download the transcription
-def download_transcription():
-    st.download_button(
-        label="Download transcription",
-        data=st.session_state['transcription_result'],
-        file_name='transcription_output.txt',
-        mime='text/plain')
-
-# Web user interface
-st.title('🎙️ Real-Time Transcription App')
-
-with st.expander('About this App'):
-    st.markdown('''
-    This Streamlit app uses the AssemblyAI API to perform real-time transcription, capturing audio directly from the user's browser.
-
-    Libraries used:
-    - `streamlit` - web framework
-    - `streamlit-webrtc` - real-time audio/video processing from the browser
-    - `websockets` - allows interaction with the API
-    - `asyncio` - allows concurrent input/output processing (though less explicitly needed with `streamlit-webrtc`)
-    - `base64` - (might still be needed for encoding/decoding if your API requires it)
-    - `json` - allows reading of AssemblyAI audio output in JSON format
-    ''')
-
+# Control buttons
 col1, col2 = st.columns(2)
+if col1.button("Start"):
+    st.session_state.run = True
+    st.session_state.text = "Connecting..."
+if col2.button("Stop"):
+    st.session_state.run = False
+    st.session_state.text = "Stopped"
 
-# Use streamlit-webrtc to capture audio from the browser
-webrtc_ctx = webrtc_streamer(
-    key="realtime_transcription",
-    mode=WebRtcMode.SENDONLY,  # We only need to send audio to the server
-    audio_html_attrs={"autoPlay": True, "controls": True}, # Optional: Display controls
-    # Add this line to request only audio access:
-    media_stream_constraints={"video": False, "audio": True} 
-)
+# Show live text
+st.info(st.session_state.text)
 
-# Stream processing logic (inside a callback, which `streamlit-webrtc` handles)
-# We'll use a class-based approach for the audio processor
-class TranscriptionProcessor(AudioProcessorBase):
-    def __init__(self, websocket_url):
-        self.websocket_url = websocket_url
-        self.websocket = None
-        self.loop = None
-        self.result_container = [] # To store transcription results
-        self.st_text_placeholder = st.empty() # Placeholder for displaying text
+# Download button for result
+if st.session_state.transcription_result:
+    st.download_button(
+        label="Download Transcription",
+        data=st.session_state.transcription_result,
+        file_name="transcription.txt",
+        mime="text/plain"
+    )
 
-    def recv(self, frame):
-        """
-        Receives an audio frame and sends it to the AssemblyAI API via WebSocket.
-        """
-        if self.websocket and st.session_state['run']:
-            # Convert audio frame to bytes and send over WebSocket
-            try:
-                self.loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(self.loop)
-                # AssemblyAI expects raw audio data
-                self.loop.run_until_complete(self.websocket.send(frame.to_ndarray().tobytes()))
-            except websockets.exceptions.ConnectionClosedOK:
-                print("WebSocket connection closed")
-            except Exception as e:
-                print(f"Error sending audio: {e}")
-        return frame # Return the frame for potential playback or further processing
+# WebSocket receive loop
+async def transcription_receiver():
+    headers = {
+        "Authorization": st.secrets["ASSEMBLYAI_API_KEY"]
+    }
 
-    async def run(self):
-        """
-        Manages the WebSocket connection and receives transcription updates.
-        """
-        headers = {
-            'Authorization': os.environ.get("ASSEMBLYAI_API_KEY") # Replace with your AssemblyAI API key
-        }
-
-        async with websockets.connect(self.websocket_url, extra_headers=headers) as self.websocket:
-            async for msg in self.websocket:
+    try:
+        async with websockets.connect(URL, extra_headers=headers) as ws:
+            st.session_state.websocket = ws
+            st.session_state.text = "Connected. Listening..."
+            async for msg in ws:
                 data = json.loads(msg)
                 if data['message_type'] == 'PartialTranscript':
-                    self.st_text_placeholder.write(f"Partial: {data['text']}")
+                    st.session_state.text = f"Partial: {data['text']}"
                 elif data['message_type'] == 'FinalTranscript':
-                    final_text = data['text']
-                    self.result_container.append(final_text)
-                    st.session_state['transcription_result'] += final_text + "\n"
-                    self.st_text_placeholder.write(f"Final: {final_text}")
-                elif data['message_type'] == 'Error':
-                    print(f"AssemblyAI Error: {data['error']}")
+                    st.session_state.text = f"Final: {data['text']}"
+                    st.session_state.transcription_result += data['text'] + "\n"
+    except Exception as e:
+        st.session_state.text = f"WebSocket error: {e}"
+        print(f"[WebSocket Error] {e}")
 
-# Integrate the processor with streamlit-webrtc
-if webrtc_ctx.state.playing:
-    processor = TranscriptionProcessor(websocket_url=URL)
-    webrtc_ctx.audio_processor = processor
-    asyncio.run(processor.run())
+# Start the receiver task in background
+def ensure_receiver_task():
+    if st.session_state.run and st.session_state.ws_task is None:
+        loop = asyncio.get_event_loop()
+        st.session_state.ws_task = loop.create_task(transcription_receiver())
 
-# Display the final transcription result
-if st.session_state['transcription_result']:
-    st.subheader("Transcription Result:")
-    st.text_area("Transcription", st.session_state['transcription_result'], height=300)
+# Audio processor class to send audio
+class AudioSender(AudioProcessorBase):
+    def recv(self, frame):
+        if st.session_state.run and st.session_state.websocket:
+            try:
+                audio_data = frame.to_ndarray().tobytes()
+                asyncio.run_coroutine_threadsafe(
+                    st.session_state.websocket.send(audio_data),
+                    asyncio.get_event_loop()
+                )
+            except Exception as e:
+                print(f"[Audio Send Error] {e}")
+        return frame
 
-    # Download button for the transcription
-    download_transcription()
+# Start streaming
+webrtc_ctx = webrtc_streamer(
+    key="stream",
+    mode=WebRtcMode.SENDONLY,
+    audio_processor_factory=AudioSender,
+    media_stream_constraints={"video": False, "audio": True},
+    audio_html_attrs={"controls": True, "autoPlay": True}
+)
 
-st.info(st.session_state['text']) # Display listening status
+# Launch background task if needed
+if st.session_state.run:
+    ensure_receiver_task()
+else:
+    # Clean up task
+    if st.session_state.ws_task:
+        st.session_state.ws_task.cancel()
+        st.session_state.ws_task = None
+    st.session_state.websocket = None

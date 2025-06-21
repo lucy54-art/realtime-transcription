@@ -1,5 +1,5 @@
 import streamlit_webrtc
-print(streamlit_webrtc.__version__)
+st.write(streamlit_webrtc.__version__)
 
 
 # import streamlit as st

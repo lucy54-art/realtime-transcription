@@ -19,3 +19,5 @@ import websockets
 st.write(f"websockets version: {websockets.__version__}")
 
 websockets version: 15.0.1
+
+st.write(streamlit_webrtc.__version__) output: 0.63.0 

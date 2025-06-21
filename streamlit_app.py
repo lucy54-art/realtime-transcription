@@ -2,6 +2,12 @@ import streamlit as st
 import streamlit_webrtc
 st.write(streamlit_webrtc.__version__)
 
+import streamlit_webrtc
+import inspect
+
+st.write("streamlit_webrtc version:", streamlit_webrtc.__version__)
+st.code(inspect.getsource(streamlit_webrtc))
+
 
 # import streamlit as st
 # from streamlit_webrtc import webrtc_streamer, WebRtcMode, ClientSettings

@@ -1,7 +1,8 @@
 streamlit
-
+streamlit-webrtc>=0.63.0
 websockets
 aiohttp
 
-streamlit-webrtc==0.63.0
+
+
 

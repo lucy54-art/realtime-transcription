@@ -1,117 +1,105 @@
 import streamlit as st
-import streamlit_webrtc
-st.write(streamlit_webrtc.__version__)
+from streamlit_webrtc import webrtc_streamer, WebRtcMode, AudioProcessorBase
+import asyncio
+import websockets
+import threading
+import base64
+import json
+import queue
 
-import streamlit_webrtc
-import inspect
+# --- Constants ---
+RATE = 16000
+WS_URL = f"wss://api.assemblyai.com/v2/realtime/ws?sample_rate={RATE}"
+API_KEY = st.secrets["api_key"]  # Ensure this key is defined in Streamlit Cloud
 
-st.write("streamlit_webrtc version:", streamlit_webrtc.__version__)
-st.code(inspect.getsource(streamlit_webrtc))
+# --- Session State ---
+if "run" not in st.session_state:
+    st.session_state.run = False
+if "text" not in st.session_state:
+    st.session_state.text = "Press Start to begin"
+if "transcription_result" not in st.session_state:
+    st.session_state.transcription_result = ""
 
+# --- Audio Frame Queue ---
+audio_queue = queue.Queue()
+websocket_ref = {"ws": None}  # Holder for websocket connection
 
-# import streamlit as st
-# from streamlit_webrtc import webrtc_streamer, WebRtcMode, ClientSettings
-# import asyncio
-# import base64
-# import json
-# import threading
-# import websockets
+# --- WebSocket + Transcription Thread ---
+def audio_ws_worker():
+    async def ws_loop():
+        async with websockets.connect(
+            WS_URL,
+            extra_headers=(("Authorization", API_KEY),),
+            ping_interval=5,
+            ping_timeout=20
+        ) as ws:
+            websocket_ref["ws"] = ws
+            await ws.recv()  # session start
+            send_task = asyncio.create_task(send_audio_loop(ws))
+            recv_task = asyncio.create_task(receive_loop(ws))
+            await asyncio.gather(send_task, recv_task)
 
-# # AssemblyAI WebSocket endpoint
-# ASSEMBLYAI_WS_URL = "wss://api.assemblyai.com/v2/realtime/ws?sample_rate=16000"
+    asyncio.run(ws_loop())
 
-# # Your AssemblyAI API key from Streamlit secrets or environment
-# API_KEY = st.secrets["api_key"]
+async def send_audio_loop(ws):
+    while st.session_state.run:
+        try:
+            chunk = audio_queue.get(timeout=1)
+        except queue.Empty:
+            continue
+        b64_data = base64.b64encode(chunk).decode("utf-8")
+        await ws.send(json.dumps({"audio_data": b64_data}))
+        await asyncio.sleep(0.01)
 
-# # Global flag to stop streaming
-# stop_flag = False
+async def receive_loop(ws):
+    while st.session_state.run:
+        msg = await ws.recv()
+        data = json.loads(msg)
+        if data.get("message_type") == "FinalTranscript":
+            st.session_state.text = f"Final: {data['text']}"
+            st.session_state.transcription_result += data["text"] + "\n"
 
-# # Container for transcription results
-# transcription_text = ""
+def start_audio_ws_thread():
+    if not st.session_state.run:
+        return
+    thread = threading.Thread(target=audio_ws_worker, daemon=True)
+    thread.start()
 
-# def run_websocket(audio_queue):
-#     """Runs in a separate thread: sends audio chunks to AssemblyAI and prints transcription."""
-#     global transcription_text
-#     async def websocket_handler():
-#         async with websockets.connect(
-#             ASSEMBLYAI_WS_URL,
-#             extra_headers=(("Authorization", API_KEY),),
-#             ping_interval=5,
-#             ping_timeout=20
-#         ) as ws:
+# --- Audio Processor ---
+class AudioSender(AudioProcessorBase):
+    def recv(self, frame):
+        if st.session_state.run and websocket_ref["ws"]:
+            chunk = frame.to_ndarray(format="int16").tobytes()
+            audio_queue.put(chunk)
+        return frame
 
-#             # Receive session start message
-#             session_begins = await ws.recv()
-#             print("Session start:", session_begins)
+# --- Streamlit UI ---
+st.set_page_config(page_title="Real‑Time Transcription", layout="centered")
+st.title("🎙️ AssemblyAI Transcription on Streamlit Cloud")
 
-#             async def send_audio():
-#                 while not stop_flag:
-#                     if not audio_queue.empty():
-#                         audio_chunk = audio_queue.get()
-#                         if audio_chunk:
-#                             # Convert bytes to base64 string
-#                             b64_audio = base64.b64encode(audio_chunk).decode("utf-8")
-#                             json_data = json.dumps({"audio_data": b64_audio})
-#                             await ws.send(json_data)
-#                     await asyncio.sleep(0.01)
+col1, col2 = st.columns(2)
+if col1.button("Start"):
+    st.session_state.run = True
+    st.session_state.text = "Connecting..."
+    st.session_state.transcription_result = ""
+    start_audio_ws_thread()
 
-#             async def receive_transcripts():
-#                 global transcription_text
-#                 while not stop_flag:
-#                     try:
-#                         result_str = await ws.recv()
-#                         result = json.loads(result_str)
-#                         if result.get("message_type") == "FinalTranscript":
-#                             text = result.get("text", "")
-#                             transcription_text = text
-#                             print("Transcription:", text)
-#                     except websockets.exceptions.ConnectionClosedOK:
-#                         break
-#                     except Exception as e:
-#                         print("WebSocket receive error:", e)
-#                         break
+if col2.button("Stop"):
+    st.session_state.run = False
+    st.session_state.text = "Stopped"
 
-#             await asyncio.gather(send_audio(), receive_transcripts())
+webrtc_streamer(
+    key="audio",
+    mode=WebRtcMode.SENDONLY,
+    audio_processor_factory=AudioSender,
+    media_stream_constraints={"audio": True, "video": False},
+)
 
-#     asyncio.run(websocket_handler())
+st.info(st.session_state.text)
 
-
-# def audio_frame_callback(frame):
-#     """This callback receives audio frames from the browser."""
-#     # frame is an AudioFrame object from streamlit-webrtc
-#     # We want raw audio bytes in 16kHz mono, 16bit PCM
-#     audio_bytes = frame.to_ndarray(format="int16").tobytes()
-#     # Put the audio bytes to the shared queue
-#     audio_queue.put(audio_bytes)
-#     return frame
-
-
-# st.title("🎙️ Real-time Transcription with AssemblyAI")
-
-# # Initialize audio queue
-# import queue
-# audio_queue = queue.Queue()
-
-# # Start the WebRTC streamer
-# webrtc_ctx = webrtc_streamer(
-#     key="assemblyai",
-#     mode=WebRtcMode.SENDONLY,
-#     audio_frame_callback=audio_frame_callback,
-#     client_settings=ClientSettings(
-#         media_stream_constraints={"audio": True, "video": False},
-#     ),
-#     async_processing=True,
-# )
-
-# if st.button("Start Transcription"):
-#     stop_flag = False
-#     threading.Thread(target=run_websocket, args=(audio_queue,), daemon=True).start()
-#     st.success("Started transcription!")
-
-# if st.button("Stop Transcription"):
-#     stop_flag = True
-#     st.success("Stopped transcription!")
-
-# if transcription_text:
-#     st.markdown("### Transcription output:")
-#     st.write(transcription_text)
+if st.session_state.transcription_result:
+    st.download_button(
+        "Download Transcript",
+        data=st.session_state.transcription_result,
+        file_name="transcript.txt"
+    )

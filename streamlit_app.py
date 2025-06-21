@@ -6,6 +6,12 @@ import threading
 import json
 from streamlit_autorefresh import st_autorefresh
 
+
+import websockets
+st.write(f"websockets version: {websockets.__version__}")
+
+
+
 # Constants
 RATE = 16000
 URL = f"wss://api.assemblyai.com/v2/realtime/ws?sample_rate={RATE}"

@@ -7,25 +7,26 @@ import base64
 import json
 import queue
 
-# --- Settings & State ---
+# --- Config & Setup ---
 RATE = 16000
 WS_URL = f"wss://api.assemblyai.com/v2/realtime/ws?sample_rate={RATE}"
 API_KEY = st.secrets["api_key"]
 
+# App state
 if "run" not in st.session_state:
     st.session_state.run = False
 if "text" not in st.session_state:
-    st.session_state.text = "Press Start to begin."
-if "transcription_result" not in st.session_state:
-    st.session_state.transcription_result = ""
+    st.session_state.text = "Not running."
+if "result" not in st.session_state:
+    st.session_state.result = ""
 
-# Queue for audio frames and holder for WebSocket
+# Audio queue and websocket tracker
 audio_queue = queue.Queue()
 websocket_ref = {"ws": None}
 
-# --- WebSocket and Audio Worker ---
-def audio_ws_worker():
-    async def ws_loop():
+# --- WebSocket thread ---
+def ws_thread():
+    async def run():
         async with websockets.connect(
             WS_URL,
             extra_headers=(("Authorization", API_KEY),),
@@ -33,73 +34,71 @@ def audio_ws_worker():
             ping_timeout=20
         ) as ws:
             websocket_ref["ws"] = ws
-            await ws.recv()  # consume session-start message
+            await ws.recv()  # consume welcome message
 
-            send_task = asyncio.create_task(send_audio_loop(ws))
-            recv_task = asyncio.create_task(receive_loop(ws))
+            send_task = asyncio.create_task(send_audio(ws))
+            recv_task = asyncio.create_task(recv_text(ws))
             await asyncio.gather(send_task, recv_task)
 
-    asyncio.run(ws_loop())
+    asyncio.run(run())
 
-async def send_audio_loop(ws):
+async def send_audio(ws):
     while st.session_state.run:
         try:
-            chunk = audio_queue.get(timeout=1)
+            data = audio_queue.get(timeout=1)
         except queue.Empty:
             continue
-        b64 = base64.b64encode(chunk).decode("utf-8")
+        b64 = base64.b64encode(data).decode("utf-8")
         await ws.send(json.dumps({"audio_data": b64}))
         await asyncio.sleep(0.01)
 
-async def receive_loop(ws):
+async def recv_text(ws):
     while st.session_state.run:
-        msg = await ws.recv()
-        data = json.loads(msg)
-        if data.get("message_type") == "FinalTranscript":
-            st.session_state.text = f"Final: {data['text']}"
-            st.session_state.transcription_result += data["text"] + "\n"
+        try:
+            msg = await ws.recv()
+            response = json.loads(msg)
+            if response.get("message_type") == "FinalTranscript":
+                text = response["text"]
+                st.session_state.text = text
+                st.session_state.result += text + "\n"
+        except Exception as e:
+            print("Error receiving:", e)
 
-def start_audio_ws():
-    if st.session_state.run and websocket_ref["ws"] is None:
-        threading.Thread(target=audio_ws_worker, daemon=True).start()
-
-# --- Audio Frame Processor ---
+# --- AudioProcessor class ---
 class AudioSender(AudioProcessorBase):
     def recv(self, frame):
         if st.session_state.run and websocket_ref["ws"]:
-            chunk = frame.to_ndarray(format="int16").tobytes()
+            chunk = frame.to_ndarray().tobytes()
             audio_queue.put(chunk)
         return frame
 
-# --- Streamlit Layout ---
-st.set_page_config(page_title="🗣️ Live Transcription", layout="centered")
-st.title("Live 📡 Speech-to-Text (AssemblyAI)")
+# --- Streamlit UI ---
+st.title("🎙️ Real-Time Transcription (AssemblyAI)")
 
-col1, col2 = st.columns(2)
-if col1.button("Start", key="start_button"):
-    st.session_state.run = True
-    st.session_state.text = "Connecting..."
-    st.session_state.transcription_result = ""
-    start_audio_ws()
+if not st.session_state.run:
+    if st.button("▶️ Start Listening"):
+        st.session_state.run = True
+        st.session_state.text = "Connecting..."
+        st.session_state.result = ""
+        threading.Thread(target=ws_thread, daemon=True).start()
+else:
+    if st.button("⏹ Stop Listening"):
+        st.session_state.run = False
+        st.session_state.text = "Stopped"
 
-if col2.button("Stop", key="stop_button"):
-    st.session_state.run = False
-    st.session_state.text = "Stopped"
-
-# Launch audio streamer (always rendered once)
+# Always active — it won't show an internal Start button
 webrtc_streamer(
-    key="audio_stream",
+    key="audio",
     mode=WebRtcMode.SENDONLY,
     audio_processor_factory=AudioSender,
-    media_stream_constraints={"audio": True, "video": False}
+    media_stream_constraints={"audio": True, "video": False},
+    rtc_configuration={  # Optional: improves compatibility
+        "iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]
+    }
 )
 
-st.info(st.session_state.text)
+st.markdown("### 📝 Transcript")
+st.write(st.session_state.text or "Waiting for speech...")
 
-if st.session_state.transcription_result:
-    st.download_button(
-        "Download Transcript",
-        data=st.session_state.transcription_result,
-        file_name="transcript.txt"
-    )
-
+if st.session_state.result:
+    st.download_button("💾 Download Transcript", st.session_state.result, "transcript.txt")

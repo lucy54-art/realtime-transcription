@@ -66,4 +66,40 @@ def start_audio_ws():
 # --- Audio Frame Processor ---
 class AudioSender(AudioProcessorBase):
     def recv(self, frame):
-        if st.session_state.run
+        if st.session_state.run and websocket_ref["ws"]:
+            chunk = frame.to_ndarray(format="int16").tobytes()
+            audio_queue.put(chunk)
+        return frame
+
+# --- Streamlit Layout ---
+st.set_page_config(page_title="🗣️ Live Transcription", layout="centered")
+st.title("Live 📡 Speech-to-Text (AssemblyAI)")
+
+col1, col2 = st.columns(2)
+if col1.button("Start", key="start_button"):
+    st.session_state.run = True
+    st.session_state.text = "Connecting..."
+    st.session_state.transcription_result = ""
+    start_audio_ws()
+
+if col2.button("Stop", key="stop_button"):
+    st.session_state.run = False
+    st.session_state.text = "Stopped"
+
+# Launch audio streamer (always rendered once)
+webrtc_streamer(
+    key="audio_stream",
+    mode=WebRtcMode.SENDONLY,
+    audio_processor_factory=AudioSender,
+    media_stream_constraints={"audio": True, "video": False}
+)
+
+st.info(st.session_state.text)
+
+if st.session_state.transcription_result:
+    st.download_button(
+        "Download Transcript",
+        data=st.session_state.transcription_result,
+        file_name="transcript.txt"
+    )
+

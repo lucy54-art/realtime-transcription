@@ -1,4 +1,6 @@
 streamlit
 websockets
 streamlit-webrtc
+streamlit-autorefresh
+
 

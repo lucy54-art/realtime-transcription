@@ -1,0 +1,9 @@
+
+
+🔍 Debug Tips
+Add print statements (or st.write()) for debugging if needed.
+Monitor browser console and Streamlit logs for WebRTC permission or connection issues.
+
+
+Let me know if you want this version with FastAPI as backend (which can be more reliable for production use).
+

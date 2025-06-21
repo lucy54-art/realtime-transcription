@@ -3,6 +3,5 @@ streamlit
 websockets
 aiohttp
 
---upgrade
 streamlit-webrtc==0.63.0
 

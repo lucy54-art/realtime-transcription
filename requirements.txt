@@ -1,5 +1,6 @@
 streamlit
 streamlit-webrtc
-streamlit-autorefresh
-websockets>=10.0
+websockets
+aiohttp
+
 

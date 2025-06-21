@@ -7,3 +7,15 @@ Monitor browser console and Streamlit logs for WebRTC permission or connection i
 
 Let me know if you want this version with FastAPI as backend (which can be more reliable for production use).
 
+
+
+
+streamlit
+streamlit-webrtc
+streamlit-autorefresh
+websockets>=10.0
+
+import websockets
+st.write(f"websockets version: {websockets.__version__}")
+
+websockets version: 15.0.1

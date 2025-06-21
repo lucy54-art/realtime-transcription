@@ -1,3 +1,7 @@
+import streamlit_webrtc
+print(streamlit_webrtc.__version__)
+
+
 import streamlit as st
 from streamlit_webrtc import webrtc_streamer, WebRtcMode, ClientSettings
 import asyncio

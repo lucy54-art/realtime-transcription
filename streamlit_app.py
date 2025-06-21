@@ -67,7 +67,6 @@ async def receiver():
                     print(f"📥 Received message: {msg[:80]}...")
                     data = json.loads(msg)
 
-                    # Update st.session_state safely here in main thread
                     if data["message_type"] == "PartialTranscript":
                         st.session_state.text = f"Partial: {data['text']}"
                     elif data["message_type"] == "FinalTranscript":
@@ -108,13 +107,15 @@ class AudioSender(AudioProcessorBase):
         if st.session_state.run and websocket:
             try:
                 audio_bytes = frame.to_ndarray().tobytes()
-                asyncio.run_coroutine_threadsafe(
+                future = asyncio.run_coroutine_threadsafe(
                     websocket.send(audio_bytes),
                     asyncio.get_event_loop()
                 )
+                # Wait for the send operation to complete or raise errors early
+                result = future.result(timeout=1)
                 print("🔊 Sent audio frame")
             except Exception as e:
-                print("❌ Audio send error:", e)
+                print(f"❌ Audio send error: {e}")
         return frame
 
 # --- WebRTC Streamer ---
